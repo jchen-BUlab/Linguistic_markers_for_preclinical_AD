@@ -1,0 +1,341 @@
+---
+title: "boruta Notebook"
+output: html_notebook
+---
+```{r}
+# Boruta feature selection using the linked amyloid/tau analysis dataset.
+# Use the same environment variables as Data_link_Final.Rmd and the speech-marker analyses.
+if(!require(Boruta))  install.packages("Boruta")
+library(Boruta)
+library(dplyr)
+library(tidyr)
+set.seed(123456)
+
+results_dir <- Sys.getenv("FHS_RESULTS_DIR", unset = "Results")
+data_dir <- Sys.getenv("FHS_OUTPUT_DIR", unset = file.path(results_dir, "Data"))
+feature_variant <- tolower(Sys.getenv("FHS_FEATURE_VARIANT", unset = "normal"))
+if (!(feature_variant %in% c("normal", "filtered"))) {
+  stop("FHS_FEATURE_VARIANT must be 'normal' or 'filtered'.")
+}
+
+# Separate output directories keep the two analyses from overwriting one another.
+table_dir <- file.path(results_dir, if (feature_variant == "filtered") {
+  "Table_Results_filtered"
+} else {
+  "Table_Results"
+})
+dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
+
+input_rds_filename <- if (feature_variant == "filtered") {
+  "tauFeatureAmyloidDemo_filtered.rds"
+} else {
+  "tauFeatureAmyloidDemo.rds"
+}
+
+# The filtered feature table has two additional columns. Keep the same predictor
+# boundaries as in the original filtered analysis (7:67; without LMd: 7:66).
+# The corresponding normal predictor boundaries are 7:65 and 7:64.
+feature_end_col <- if (feature_variant == "filtered") 67 else 65
+```
+
+### Load data
+
+```{r}
+# Input RDS files are created by the corresponding speech_markers_amyloid notebook.
+whole_df<-readRDS(file.path(data_dir, input_rds_filename))
+if (ncol(whole_df) < feature_end_col) {
+  stop("The input RDS has fewer columns than the selected feature range.")
+}
+```
+
+```{r}
+feat1 <- c("adjectivesRate",
+"adverbsRate",
+"conjunctionsRate",
+"interjectionsRate", 
+"noiseRate",
+"noiseSentencesRate",
+"particlesRate",
+"uniqueAdjectivesRate",
+"uniqueAdverbsRate",
+"uniqueInterjectionsRate",
+"uniqueParticlesRate"
+)
+
+# type 2: > 0 , right skewed
+# model: gamma regression
+feat2 <- c(
+"pronounProperNounRatio", 
+"standardizedPauseRate"
+)
+
+# type 3: count variables, with many zeros
+# model: negative binomial regression
+feat3 <- c(
+"betweenUtterancePauseNumber",
+"totalFilledPauses",
+"totalNoise",
+"totalNoiseSentences",
+"withinUtterancePause"
+)
+```
+
+```{r}
+# whole_df[,feat1]<-scale(whole_df[,feat1])
+# whole_df[,feat2]<-scale(whole_df[,feat2])
+# whole_df[,feat3]<-scale(whole_df[,feat3])
+```
+
+
+### scale
+
+```{r}
+# Keep the original column-based feature selection, adjusted for each variant.
+whole_df_amyloid_selected<-whole_df[,c(7:feature_end_col)]
+whole_df_amyloid_selected<-na.omit(whole_df_amyloid_selected)
+whole_df_tau_selected<-whole_df
+whole_df_tau_selected<-na.omit(whole_df_tau_selected)
+
+```
+
+
+### Amyloid status: Demographics + linguistic features + LMd → amyloid status
+```{r}
+set.seed(123456)
+random_seeds <- sample.int(1e9, 20, replace = FALSE)
+
+results_list <- list()
+
+
+# Repeat Boruta across 20 random seeds; count how often each feature is confirmed.
+for (seed in random_seeds) {
+  set.seed(seed)
+  boruta_result <- Boruta(ADNI.petpos ~ ., data = whole_df_amyloid_selected, doTrace = 0, maxRuns = 500)
+  plot(boruta_result, cex.axis=.7, las=2, xlab="", main="Variable Importance")
+  boruta_fixed <- TentativeRoughFix(boruta_result)
+  
+
+  stats <- attStats(boruta_fixed)
+  stats$feat_name <- rownames(stats)
+  
+
+  results_list[[as.character(seed)]] <- stats
+}
+```
+
+
+
+```{r}
+# Feature-stability score = number of runs with a "Confirmed" decision.
+feature_confirmation_counts <- sapply(results_list, function(x) x$decision == "Confirmed")
+
+feature_stability <- rowSums(feature_confirmation_counts)
+feature_stability_df <- data.frame(
+  Feature = rownames(results_list[[1]]),
+  Confirmed_Count = feature_stability
+)
+```
+
+
+
+
+
+
+### Amyloid status: Demographics + linguistic features → amyloid status (without LMd)
+
+```{r}
+whole_df_amyloid_selected_nolmd<-whole_df_amyloid_selected[,!colnames(whole_df_amyloid_selected)%in%c('LMd')]
+```
+
+```{r}
+set.seed(123456)
+random_seeds <- sample.int(1e9, 20, replace = FALSE)
+
+results_list_nolmd <- list()
+
+
+for (seed in random_seeds) {
+  set.seed(seed)
+  boruta_result <- Boruta(ADNI.petpos ~ ., data = whole_df_amyloid_selected_nolmd, doTrace = 0, maxRuns = 500)
+  #plot(boruta_result, cex.axis=.7, las=2, xlab="", main="Variable Importance")
+  boruta_fixed <- TentativeRoughFix(boruta_result)
+  
+
+  stats <- attStats(boruta_fixed)
+  stats$feat_name <- rownames(stats)
+  
+
+  results_list_nolmd[[as.character(seed)]] <- stats
+}
+```
+
+```{r}
+feature_confirmation_counts_nolmd <- sapply(results_list_nolmd, function(x) x$decision == "Confirmed")
+
+feature_stability_nolmd <- rowSums(feature_confirmation_counts_nolmd)
+feature_stability_df_nolmd <- data.frame(
+  Feature = rownames(results_list_nolmd[[1]]),
+  Confirmed_Count = feature_stability_nolmd
+)
+```
+
+
+
+```{r}
+feature_stability_df_amyloid<-left_join(feature_stability_df,feature_stability_df_nolmd,by='Feature')
+```
+
+```{r}
+feature_stability_df_amyloid <- feature_stability_df_amyloid %>% 
+  dplyr::rename(count_lmd = Confirmed_Count.x, count_nolmd = Confirmed_Count.y)
+```
+
+```{r}
+write.csv(feature_stability_df_amyloid,file.path(table_dir, "boruta_amyloidFeatureLMdDemo.csv"),row.names=FALSE)
+```
+
+
+
+### Tau PET: Demographics + linguistic features + LMd + amyloid status → tau
+```{r}
+set.seed(123456)
+random_seeds <- sample.int(1e9, 20, replace = FALSE)
+
+# Analyze each of the six tau PET regions independently.
+bi_columns <- c("Amygdala","Putamen","Entorhinal","Inferiorparietal" ,"Inferiortemporal","Precuneus")
+
+boruta_tauDemoAmyloidFeature <- data.frame(
+  Feature = character(),
+  count = numeric(),
+  tau=character(),
+  stringsAsFactors = FALSE
+)
+
+for (tau in bi_columns){
+  whole_df_tau_sub<-whole_df_tau_selected %>%
+    select(7:feature_end_col, all_of(tau))
+  
+  results_list_sub <- list()
+  for (seed in random_seeds) {
+    set.seed(seed)
+    formula<-as.formula(paste(tau,'~ .'))
+    boruta_result <- Boruta(formula, data = whole_df_tau_sub, doTrace = 0, maxRuns = 500)
+    #plot(boruta_result, cex.axis=.7, las=2, xlab="", main="Variable Importance")
+    boruta_fixed <- TentativeRoughFix(boruta_result)
+    stats <- attStats(boruta_fixed)
+    stats$feat_name <- rownames(stats)
+    
+  
+    results_list_sub[[as.character(seed)]] <- stats
+  }
+  feature_confirmation_counts_sub <- sapply(results_list_sub, function(x) x$decision == "Confirmed")
+
+  feature_stability_sub <- rowSums(feature_confirmation_counts_sub)
+  feature_stability_df_sub <- data.frame(
+    Feature = rownames(results_list_sub[[1]]),
+    Confirmed_Count = feature_stability_sub
+  )
+  
+  boruta_tauDemoAmyloidFeature <- rbind(boruta_tauDemoAmyloidFeature, data.frame(
+    Feature = feature_stability_df_sub$Feature,
+    count = feature_stability_df_sub$Confirmed_Count,
+    tau= tau
+    ))
+  
+}
+
+
+```
+
+
+
+```{r}
+boruta_tauDemoAmyloidFeature_wider<-pivot_wider(
+  boruta_tauDemoAmyloidFeature,
+  names_from=tau,
+  values_from=count
+)
+  
+```
+
+
+
+### Tau PET: Demographics + linguistic features + amyloid status → tau (without LMd)
+
+```{r}
+whole_df_tau_selected_nolmd<-whole_df_tau_selected[,!colnames(whole_df_tau_selected)%in%c('LMd')]
+```
+
+
+```{r}
+set.seed(123456)
+random_seeds <- sample.int(1e9, 20, replace = FALSE)
+
+# Analyze each of the six tau PET regions independently.
+bi_columns <- c("Amygdala","Putamen","Entorhinal","Inferiorparietal" ,"Inferiortemporal","Precuneus")
+
+boruta_tauDemoAmyloidFeature_nolmd <- data.frame(
+  Feature = character(),
+  count = numeric(),
+  tau=character(),
+  stringsAsFactors = FALSE
+)
+
+for (tau in bi_columns){
+  whole_df_tau_sub<-whole_df_tau_selected_nolmd %>%
+    select(7:(feature_end_col - 1), all_of(tau))
+  
+  results_list_sub <- list()
+  for (seed in random_seeds) {
+    set.seed(seed)
+    formula<-as.formula(paste(tau,'~ .'))
+    boruta_result <- Boruta(formula, data = whole_df_tau_sub, doTrace = 0, maxRuns = 500)
+    #plot(boruta_result, cex.axis=.7, las=2, xlab="", main="Variable Importance")
+    boruta_fixed <- TentativeRoughFix(boruta_result)
+    stats <- attStats(boruta_fixed)
+    stats$feat_name <- rownames(stats)
+    
+  
+    results_list_sub[[as.character(seed)]] <- stats
+  }
+  feature_confirmation_counts_sub <- sapply(results_list_sub, function(x) x$decision == "Confirmed")
+
+  feature_stability_sub <- rowSums(feature_confirmation_counts_sub)
+  feature_stability_df_sub <- data.frame(
+    Feature = rownames(results_list_sub[[1]]),
+    Confirmed_Count = feature_stability_sub
+  )
+  
+  boruta_tauDemoAmyloidFeature_nolmd <- rbind(boruta_tauDemoAmyloidFeature_nolmd, data.frame(
+    Feature = feature_stability_df_sub$Feature,
+    count = feature_stability_df_sub$Confirmed_Count,
+    tau= tau
+    ))
+  
+}
+```
+
+```{r}
+boruta_tauDemoAmyloidFeature_nolmd_wider<-pivot_wider(
+  boruta_tauDemoAmyloidFeature_nolmd,
+  names_from=tau,
+  values_from=count
+)
+  
+```
+
+
+```{r}
+names(boruta_tauDemoAmyloidFeature_nolmd_wider) <- c("Feature","Amygdala_nolmd","Putamen_nolmd","Entorhinal_nolmd","Inferiorparietal_nolmd"," Inferiortemporal_nolmd","Precuneus_nolmd" )
+```
+
+
+```{r}
+boruta_tauDemoAmyloidFeature_final<-left_join(boruta_tauDemoAmyloidFeature_wider,boruta_tauDemoAmyloidFeature_nolmd_wider,by='Feature')
+```
+
+```{r}
+write.csv(boruta_tauDemoAmyloidFeature_final,file.path(table_dir, "boruta_tauAmyloidFeatureLMdDemo.csv"),row.names=FALSE)
+```
+
+

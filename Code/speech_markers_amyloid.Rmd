@@ -1,0 +1,1037 @@
+---
+title: "Speech markers and amyloid status"
+output: html_notebook
+---
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(gridExtra)
+library(rlang)
+
+# Input comes from Data_link_Final.Rmd. Configure paths without changing filenames.
+results_dir <- Sys.getenv("FHS_RESULTS_DIR", unset = "Results")
+data_dir <- Sys.getenv("FHS_OUTPUT_DIR", unset = file.path(results_dir, "Data"))
+figure_dir <- file.path(results_dir, "Figure_Results")
+table_dir <- file.path(results_dir, "Table_Results")
+
+# Ensure all destinations exist before exporting figures and statistical tables.
+for (path in c(results_dir, data_dir, figure_dir, table_dir)) {
+  dir.create(path, recursive = TRUE, showWarnings = FALSE)
+}
+```
+
+### Load data
+```{r}
+# Merged transcription, neuropsychological, and PET dataset from Data_link_Final.Rmd.
+whole_df<-read.csv(file.path(data_dir, "feature_np_tau_amyloid_20251116.csv"))
+```
+
+### Outlier
+
+```{r}
+mean_value<-mean(whole_df$bi_entorhinal,na.rm=TRUE)
+std_dev<-sd(whole_df$bi_entorhinal,na.rm=TRUE)
+lower_bound <- mean_value - 3 * std_dev
+upper_bound <- mean_value + 3 * std_dev
+outliers<-whole_df[whole_df$bi_entorhinal<lower_bound | whole_df$bi_entorhinal>upper_bound,]
+outliers
+```
+
+
+
+### flap the data
+
+```{r}
+# Preserve the study-specific row selection (depends on the historical row order).
+whole_df<-whole_df[c(1,3:239),]
+whole_df$sex<-as.factor(whole_df$sex)
+whole_df$ADNI.petpos<-as.factor(whole_df$ADNI.petpos)
+whole_df$Educg<-as.factor(whole_df$Educg)
+```
+
+```{r}
+whole_df<-whole_df%>%
+  dplyr::rename(Amygdala = bi_Amygdala, Putamen = bi_Putamen, Inferiortemporal = bi_inferiortemporal, Inferiorparietal = bi_inferiorparietal, Entorhinal = bi_entorhinal, Precuneus = bi_precuneus)
+  
+```
+
+
+### Boxplot of tau SUVR by Region and amyloid status
+```{r}
+whole_df_long <- whole_df %>%
+  pivot_longer(cols = c('Amygdala','Putamen','Inferiortemporal','Inferiorparietal','Entorhinal','Precuneus'), 
+               names_to = "Region", 
+               values_to = "TauSUVR")
+```
+
+```{r}
+p <- ggplot(whole_df_long, aes(x = Region, y = TauSUVR, fill = ADNI.petpos)) +
+  geom_boxplot() +
+  theme_classic() +
+  labs(x = "Region",
+       y = "tau SUVR") +
+  scale_fill_brewer(palette = "Set1")
+p
+ggsave(file.path(results_dir, "Figure_ResultsTauSUVR_boxplot.png"), p, width = 10, height = 4, dpi = 300)
+
+```
+
+
+```{r}
+whole_df_long$ADNI.petpos <- as.character(whole_df_long$ADNI.petpos)
+whole_df_long$ADNI.petpos[is.na(whole_df_long$ADNI.petpos)] <- "Missing"
+whole_df_long$ADNI.petpos <- as.factor(whole_df_long$ADNI.petpos)
+for (c in colnames(whole_df)[3:8]){
+  region1_data <- whole_df_long %>% filter(Region == c)
+  anova_result <- aov(TauSUVR ~ ADNI.petpos, data = region1_data)
+  print(c)
+  print(summary(anova_result))
+  print(TukeyHSD(anova_result))
+}
+
+```
+```{r}
+whole_df_long_selected<-whole_df_long[,c('TauSUVR','Region',"ADNI.petpos")]
+```
+
+
+
+
+
+```{r}
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(rstatix)
+
+df <- whole_df_long_selected %>%
+  mutate(ADNI.petpos = as.character(ADNI.petpos)) %>%
+  mutate(ADNI.petpos = ifelse(ADNI.petpos=='Missing', 'NA', ADNI.petpos)) %>%
+  mutate(ADNI.petpos = factor(ADNI.petpos, levels = c("A-", "A+", "NA")))
+
+region_max <- df %>%
+  group_by(Region) %>%
+  dplyr::summarise(region_max = max(TauSUVR, na.rm = TRUE))
+
+stat_test <- df %>%
+  group_by(Region) %>%
+  pairwise_t_test(TauSUVR ~ ADNI.petpos, p.adjust.method = "BH") %>%
+  mutate(
+    p.signif = case_when(
+      p.adj < 0.001 ~ "***",
+      p.adj < 0.01 ~ "**",
+      p.adj < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  left_join(region_max, by = "Region") %>%
+  mutate(
+    y.position = case_when(
+      group1 == "A+" & group2 == "NA" ~ region_max *1.05,
+      group1 == "A-" & group2 == "A+" ~ region_max *1.1,
+      group1 == "A-" & group2 == "NA" ~ region_max *1.15,
+      TRUE                            ~ region_max + 0.2  # fallback
+    )
+  )
+
+
+p <- ggplot(df, aes(x = ADNI.petpos, y = TauSUVR)) +
+  geom_boxplot(aes(fill=ADNI.petpos)) +
+  facet_wrap(~ Region, scales = "free_y") +
+  stat_pvalue_manual(
+    data = stat_test,
+    label = "p.signif",
+    y.position = "y.position",
+    xmin = "group1",
+    xmax = "group2",
+    tip.length = 0.01
+  ) +
+  scale_fill_manual(values = c("A-" = "#1f77b4", "A+" = "#e41a1c", "NA" = "#999999")) +
+  theme_bw() + 
+  labs(x = "Amyloid Status", y = "Tau SUVR", fill = "Group") 
+ggsave(file.path(figure_dir, "tau_AD_boxplot.png"), plot = p, width = 10, height = 8, dpi = 300)
+
+p
+```
+
+### Remove subject ID
+```{r}
+# The following selections are position-based and depend on the input column order.
+whole_df<-whole_df[,c(2:116,119:122)]
+```
+
+
+```{r}
+amyloid_tau<-whole_df[,c(2:7,116:119)]
+amyloid_tau_long<-amyloid_tau%>%
+  pivot_longer(
+    cols=c('Amygdala','Putamen','Inferiortemporal','Inferiorparietal','Entorhinal','Precuneus'),
+    names_to='Region',
+    values_to='SUVR'
+  )
+```
+#### Figure 1B
+```{r}
+p <- ggplot(amyloid_tau_long, aes(x = age, y = SUVR, color = ADNI.petpos)) +
+  geom_point(alpha = 0.8, size = 6, shape = 1) +
+  geom_smooth(method = 'lm', se = FALSE, aes(color = ADNI.petpos), na.rm = FALSE) +
+  facet_wrap(~Region, nrow = 3, ncol = 2, scales = 'free_y') +
+  labs(
+    x = "Age at Tau PET Scan",
+    y = "Tau SUVR"
+  ) +
+  scale_color_manual(values = c("A-" = "#9b80ff", "A+" = "#ff1452", "NA" = "grey50")) +
+  theme_classic()
+p
+```
+
+```{r}
+ggsave(file.path(figure_dir, "Figure_age_Amyloid_Scatter.png"),p,width = 8, height = 8,dpi = 300)
+```
+
+### Distribution of tau between different amyloid status groups
+```{r}
+amyloid_tau_distribution <- amyloid_tau %>%
+  dplyr::group_by(ADNI.petpos) %>%
+  dplyr::summarise(
+    Count = n(),
+    Amygdala_Mean = mean(Amygdala, na.rm = TRUE),
+    Amygdala_SD = sd(Amygdala, na.rm = TRUE),
+    Putamen_Mean = mean(Putamen, na.rm = TRUE),
+    Putamen_SD = sd(Putamen, na.rm = TRUE),
+    entorhinal_Mean = mean(Entorhinal, na.rm = TRUE),
+    entorhinal_SD = sd(Entorhinal, na.rm = TRUE),
+    inferiorparietal_Mean = mean(Inferiorparietal, na.rm = TRUE),
+    inferiorparietal_SD = sd(Inferiorparietal, na.rm = TRUE),
+    inferiortemporal_Mean = mean(Inferiortemporal, na.rm = TRUE),
+    inferiortemporal_SD = sd(Inferiortemporal, na.rm = TRUE),
+    precuneus_Mean = mean(Precuneus, na.rm = TRUE),
+    precuneus_SD = sd(Precuneus, na.rm = TRUE),
+    age_Mean = mean(age,na.rm=TRUE),
+    age_SD = sd(age,na.rm=TRUE),
+    Male_Count = sum(sex == "1", na.rm = TRUE),
+    Female_Count = sum(sex == "2", na.rm = TRUE),
+    Educg_Mean = mean(as.numeric(Educg), na.rm = TRUE),
+    Educg_SD = sd(as.numeric(Educg), na.rm = TRUE)
+  )
+```
+
+
+```{r}
+write.csv(amyloid_tau_distribution,file.path(table_dir, "amyloid_tau_distribution.csv"))
+```
+
+
+### Multiple regression model. amyloid+age -> tau
+
+```{r}
+lm_tauAgeAmyloid <- data.frame(
+  Feature = character(),
+  Estimate = numeric(),
+  StdError = numeric(),
+  tValue = numeric(),
+  Pr = numeric(),
+  Model = character(),
+  stringsAsFactors = FALSE
+)
+
+```
+
+#### Table 2
+```{r}
+for (tau in colnames(amyloid_tau[1:6])){
+  formula <- as.formula(paste(tau, "~ age + ADNI.petpos"))
+  model <- lm(formula, data = amyloid_tau)
+  coef_table<-coef(summary(model))
+  for (var in rownames(coef_table[-1,])) {
+    var_coef <- coef_table[var,]
+    lm_tauAgeAmyloid <- rbind(lm_tauAgeAmyloid, data.frame(
+      Feature = var,
+      Estimate = var_coef["Estimate"],
+      StdError = var_coef["Std. Error"],
+      tValue = var_coef["t value"],
+      Pr = var_coef["Pr(>|t|)"],  
+      Model = tau
+    ))
+  }
+}
+```
+
+
+```{r}
+write.csv(lm_tauAgeAmyloid,file.path(table_dir, "lm_tauAgeAmyloid.csv"))
+```
+
+### Select data for lm analysis
+```{r}
+whole_df<-whole_df[,c(2:7,20,62:119)]
+```
+
+```{r}
+# whole_df$logBetweenUtterancePause<-log(whole_df$betweenUtterancePause)
+```
+
+
+```{r}
+# Assign each feature to its original regression family; do not change the groups.
+feat1 <- c("adjectivesRate",
+"adverbsRate",
+"conjunctionsRate",
+"interjectionsRate", 
+"noiseRate",
+"noiseSentencesRate",
+"particlesRate",
+"uniqueAdjectivesRate",
+"uniqueAdverbsRate",
+"uniqueInterjectionsRate",
+"uniqueParticlesRate"
+)
+
+# type 2: > 0 , right skewed
+# model: gamma regression
+feat2 <- c(
+"pronounProperNounRatio", 
+"standardizedPauseRate"
+)
+
+# type 3: count variables, with many zeros
+# model: negative binomial regression
+feat3 <- c(
+"betweenUtterancePauseNumber",
+"totalFilledPauses",
+"totalNoise",
+"totalNoiseSentences",
+"withinUtterancePause"
+)
+
+```
+
+
+```{r}
+feat4<-setdiff(colnames(whole_df)[8:61],c(feat1,feat2,feat3))
+```
+
+
+
+
+```{r}
+# Standardize regional tau measurements before the downstream regression analyses.
+whole_df[,c(1:6)] <- scale(whole_df[,c(1:6)])
+```
+
+
+```{r}
+saveRDS(whole_df,file.path(data_dir, "tauFeatureAmyloidDemo.rds"))
+```
+
+### speech markers and amyloid status
+
+```{r}
+amyloid_feature_lmd<-whole_df[,c(1:65)]
+# Complete-case analysis for the amyloid association models.
+amyloid_feature_lmd<-na.omit(amyloid_feature_lmd)
+```
+
+#### Linear regression. age+sex+educg+amyloid -> speech markers
+
+
+
+```{r}
+cov_ls <- c("age", "sex", "Educg")
+
+```
+
+
+```{r}
+# install.packages(c("glmmTMB", "marginaleffects"))
+library(glmmTMB)
+library(marginaleffects)
+run_betaIZ <- function(outcome, predictor, covariates, data) {
+  # Combine predictor and covariates into a formula string
+  formula_str1 <- paste(" ~ ", paste(c(predictor, covariates), collapse = " + "))
+  formula_str2 <- paste(outcome, formula_str1)
+  
+  # Convert to formula object
+  formula_obj1 <- as.formula(formula_str1)
+  formula_obj2 <- as.formula(formula_str2)
+  
+  # Fit zero-inflated beta regression model
+  model <- glmmTMB(
+    formula_obj2,  # mean of positive part (beta)
+    ziformula = formula_obj1,  # zero-inflation model (Pr(“extra zero”))
+    dispformula = formula_obj1, 
+    family = beta_family(link = "logit"),
+    data = data
+  )
+    
+  # summary(model)
+  
+  # Average marginal effect of X on E[y | y>0, X]
+  ave_me <- avg_slopes(
+    model,
+    variables = predictor,
+    type = "response",            # on the y scale, not logit
+    re.form = NA
+  )
+
+  # summary(ave_me)
+  return(ave_me)
+}
+```
+
+
+```{r}
+run_betaIZ(feat1[1],'ADNI.petpos',cov_ls,amyloid_feature_lmd)
+```
+
+
+```{r}
+run_gamma <- function(outcome, predictor, covariates, data) {
+  # Combine predictor and covariates into a formula string
+  formula_str1 <- paste(" ~ ", paste(c(predictor, covariates), collapse = " + "))
+  formula_str2 <- paste(outcome, formula_str1)
+  
+  # Convert to formula object
+  formula_obj1 <- as.formula(formula_str1)
+  formula_obj2 <- as.formula(formula_str2)
+  
+  # Fit zero-inflated beta regression model
+  model <- glm(
+    formula_obj2,  # mean of positive part (beta)
+    family = Gamma(link = "log"),
+    data = data
+  )
+    
+  # summary(model)
+  # 
+  # confint(model)        # 95% CIs for coefficients
+
+  # Average marginal effect of X on E[y | y>0, X]
+  ave_me <- avg_slopes(
+    model,
+    variables = predictor,
+    type = "response"            # on the y scale, not logit
+  )
+
+  # summary(ave_me)
+  return(ave_me)
+}
+```
+
+```{r}
+run_gamma(feat2[1], 'ADNI.petpos',cov_ls,amyloid_feature_lmd)
+```
+
+
+
+```{r}
+library(MASS)
+
+run_negbreg <- function(outcome, predictor, covariates, data) {
+  # Combine predictor and covariates into a formula string
+  formula_str1 <- paste(" ~ ", paste(c(predictor, covariates), collapse = " + "))
+  formula_str2 <- paste(outcome, formula_str1)
+  
+  # Convert to formula object
+  formula_obj1 <- as.formula(formula_str1)
+  formula_obj2 <- as.formula(formula_str2)
+  
+  # Fit zero-inflated beta regression model
+  model <- glm.nb(
+    formula_obj2,  # mean of positive part (beta)
+    data = data
+  )
+    
+  # summary(model)
+
+  # confint(model)        # 95% CIs for coefficients
+
+  # Average marginal effect of X on E[y | y>0, X]
+  ave_me <- avg_slopes(
+    model,
+    variables = predictor,
+    type = "response"            # on the y scale, not logit
+  )
+
+  # summary(ave_me)
+  return(ave_me)
+}
+```
+```{r}
+run_negbreg(feat3[1], 'ADNI.petpos',cov_ls,amyloid_feature_lmd)
+
+```
+
+```{r}
+run_gaussian <- function(outcome, predictor, covariates, data) {
+  # Combine predictor and covariates into a formula
+  formula_str <- paste(outcome, "~", paste(c(predictor, covariates), collapse = " + "))
+  formula_obj <- as.formula(formula_str)
+  
+  # Fit Gaussian regression model
+  model <- glm(
+    formula_obj,
+    family = gaussian(),
+    data = data
+  )
+  
+  # Main model summary
+  # print(summary(model))
+  # 
+  # Confidence intervals
+  # print(confint(model))
+  
+  # Average marginal effects
+  ave_me <- avg_slopes(
+    model,
+    variables = predictor,
+    type = "response"   # effect on the original scale
+  )
+  
+  # print(summary(ave_me))
+  
+  return(ave_me)
+}
+```
+
+```{r}
+run_gaussian(feat4[1], 'ADNI.petpos',cov_ls,amyloid_feature_lmd)
+
+```
+# added by JChen
+
+```{r}
+feature_lmd<-whole_df[,c(7:61,63:65)]
+# Complete-case analysis for the LM delayed-recall models.
+feature_lmd<-na.omit(feature_lmd)
+```
+
+regression models were used with demographic variables (i.e., age, sex, education) and LMd predicting each feature
+```{r}
+lm_featureDemoLMd <- data.frame()
+
+for (feature in colnames(feature_lmd)[2:55]) {
+
+  if (feature %in% feat1) {
+    print(feature)
+    model_func <- run_betaIZ
+    model_type <- "BetaIZ"
+  } else if (feature %in% feat2) {
+    model_func <- run_gamma
+    model_type <- "Gamma"
+  } else if (feature %in% feat3) {
+    model_func <- run_negbreg
+    model_type <- "NegBin"
+  } else if (feature %in% c(feat4)) {
+    model_func <- run_gaussian
+    model_type <- "Gaussian"
+  } else {
+    warning(paste("Feature", feature, "not found in any type vector! Skipped."))
+    next
+  }
+  
+  ave_me <- model_func(
+    outcome    = feature,
+    predictor  = "LMd",
+    covariates = c("age", "sex", "Educg"),
+    data       = feature_lmd
+  )
+  
+  tmp <- data.frame(
+    Feature      = ave_me$term,
+    Estimate     = ave_me$estimate,
+    StdError     = ave_me$std.error,
+    t_or_z_Value = ave_me$statistic,
+    Pr           = ave_me$p.value,
+    Outcome       = feature,
+    CI_Lower     = ave_me$conf.low,
+    CI_Upper     = ave_me$conf.high,
+    Dist         = model_type
+  )
+  
+  lm_featureDemoLMd <- rbind(lm_featureDemoLMd, tmp)
+}
+
+```
+
+```{r}
+lm_featureDemoLMd_Select<-lm_featureDemoLMd[lm_featureDemoLMd$Feature=='LMd' & lm_featureDemoLMd$Pr<0.05,]
+lm_featureDemoLMd_Select
+```
+
+```{r}
+stats_data<-data.frame(feat_name=colnames(feature_lmd[c(2:55)]))
+
+```
+
+```{r}
+for (feature in colnames(feature_lmd[2:55])){
+  test_results <- cor.test(feature_lmd$LMd, feature_lmd[[feature]], method = "spearman")
+  stats_data[stats_data$feat_name==feature,'LMd_correlation_single_variant_corr']=test_results$estimate
+  stats_data[stats_data$feat_name==feature,'LMd_correlation_single_variant_pvalue']=test_results$p.value
+}
+```
+
+```{r}
+stats_data[stats_data$LMd_correlation_single_variant_pvalue<0.05,]
+```
+
+
+```{r}
+for (feature in stats_data$feat_name) {
+  print(feature)
+  stats_data[stats_data$feat_name == feature, 'lmd_estimate'] <- lm_featureDemoLMd[lm_featureDemoLMd$Outcome == feature, 'Estimate']
+  stats_data[stats_data$feat_name == feature, 'lmd_pvalue'] <- lm_featureDemoLMd[lm_featureDemoLMd$Outcome == feature, 'Pr']
+  stats_data[stats_data$feat_name == feature, 'lmd_CI_lower'] <- lm_featureDemoLMd[lm_featureDemoLMd$Outcome == feature, 'CI_Lower']
+  stats_data[stats_data$feat_name == feature, 'lmd_CI_upper'] <- lm_featureDemoLMd[lm_featureDemoLMd$Outcome == feature, 'CI_Upper']
+}
+```
+
+```{r}
+write.csv(stats_data,file.path(table_dir, "Spearman_LMd_Feature_cor.csv"))
+```
+
+```{r}
+write.csv(lm_featureDemoLMd,file.path(table_dir, "lm_LMd_Feature_cor.csv"))
+```
+
+## end of modification
+linear regression models were used with demographic variables (i.e., age, sex, education) and amyloid status predicting each of the following: LM Delayed Recall, the five speech markers, and regional tau burden.
+```{r}
+
+lm_featureDemoAmyloid <- data.frame()
+
+for (feature in colnames(amyloid_feature_lmd)[1:61]) {
+
+  if (feature %in% feat1) {
+    print(feature)
+    model_func <- run_betaIZ
+    model_type <- "BetaIZ"
+  } else if (feature %in% feat2) {
+    model_func <- run_gamma
+    model_type <- "Gamma"
+  } else if (feature %in% feat3) {
+    model_func <- run_negbreg
+    model_type <- "NegBin"
+  } else if (feature %in% c(feat4,'LMd',colnames(amyloid_feature_lmd)[1:6])) {
+    model_func <- run_gaussian
+    model_type <- "Gaussian"
+  } else {
+    warning(paste("Feature", feature, "not found in any type vector! Skipped."))
+    next
+  }
+  
+  ave_me <- model_func(
+    outcome    = feature,
+    predictor  = "ADNI.petpos",
+    covariates = c("age", "sex", "Educg"),
+    data       = amyloid_feature_lmd
+  )
+  
+  tmp <- data.frame(
+    Feature      = ave_me$term,
+    Estimate     = ave_me$estimate,
+    StdError     = ave_me$std.error,
+    t_or_z_Value = ave_me$statistic,
+    Pr           = ave_me$p.value,
+    Outcome       = feature,
+    CI_Lower     = ave_me$conf.low,
+    CI_Upper     = ave_me$conf.high,
+    Dist         = model_type
+  )
+  
+  lm_featureDemoAmyloid <- rbind(lm_featureDemoAmyloid, tmp)
+}
+
+```
+
+
+```{r}
+lm_featureDemoAmyloid_Select<-lm_featureDemoAmyloid[lm_featureDemoAmyloid$Feature=='ADNI.petpos' & lm_featureDemoAmyloid$Pr<0.05,]
+lm_featureDemoAmyloid_Select
+```
+
+```{r}
+write.csv(lm_featureDemoAmyloid,file.path(table_dir, "lm_featureDemoAmyloid.csv"),row.names = FALSE)
+write.csv(lm_featureDemoAmyloid_Select,file.path(table_dir, "lm_featureDemoAmyloid_select.csv"),row.names = FALSE)
+```
+
+```{r}
+lm_featureDemoAmyloid_table<-lm_featureDemoAmyloid%>%
+  filter(Outcome %in%c('Amygdala','Putamen','Inferiortemporal','Inferiorparietal','Entorhinal','Precuneus','LMd','ideaDensity'))
+```
+
+```{r}
+# lm_featureDemoAmyloid_table_wide <- lm_featureDemoAmyloid_table %>%
+#   mutate(
+#     Estimate_sci = formatC(Estimate, format = "e", digits = 2),
+#     Pr_sci = formatC(Pr, format = "e", digits = 2),
+#     CI_lower_sci = formatC(CI_Lower, format = "e", digits = 2),
+#     CI_upper_sci = formatC(CI_Upper, format = "e", digits = 2),
+#     Combined = paste0(Estimate_sci, " (",
+#                       Pr_sci, ")\n[",
+#                       CI_lower_sci, ", ",
+#                       CI_upper_sci, "]")
+#   ) %>%
+#   select(Outcome, Feature, Combined) %>%
+#   pivot_wider(
+#     names_from = Feature,
+#     values_from = Combined
+#   )
+```
+
+
+```{r}
+# write.csv(lm_featureDemoAmyloid_table_wide,file.path(table_dir, "lm_featureDemoAmyloid_table_wide.csv"),row.names = FALSE)
+```
+
+#### Linear regression. age+sex+educg+amyloid -> lmd
+
+# ```{r}
+# 
+# model <- lm(LMd ~ sex+age+ADNI.petpos+Educg, data = amyloid_feature_lmd)
+# summary(model)
+# ```
+
+not significantly differ in LM Delayed Recall for different Amyloid status groups.
+
+Demographic influnces on speech markers and LMd were present.
+
+### Speech markers and region tau
+
+```{r}
+whole_df_clean<-whole_df[,c(1:65)]
+whole_df_clean<-na.omit(whole_df_clean)
+```
+
+
+#### Not control lmd. tau+age+sex+education+amyloid -> feature
+
+
+
+```{r}
+
+lm_featureDemoAmyloidTau <- data.frame()
+for (tau in colnames(whole_df_clean[1:6])){
+  for (feature in colnames(whole_df_clean)[7:61]) {
+    if (feature %in% feat1) {
+      model_func <- run_betaIZ
+      model_type <- "BetaIZ"
+    } else if (feature %in% feat2) {
+      model_func <- run_gamma
+      model_type <- "Gamma"
+    } else if (feature %in% feat3) {
+      model_func <- run_negbreg
+      model_type <- "NegBin"
+    } else if (feature %in% c(feat4,'LMd')) {
+      model_func <- run_gaussian
+      model_type <- "Gaussian"
+    } else {
+      warning(paste("Feature", feature, "not found in any type vector! Skipped."))
+      next
+    }
+    
+    ave_me <- model_func(
+      outcome    = feature,
+      predictor  = tau,
+      covariates = c("age", "sex", "Educg","ADNI.petpos"),
+      data       = whole_df_clean
+    )
+    
+    tmp <- data.frame(
+      Feature      = ave_me$term,
+      Estimate     = ave_me$estimate,
+      StdError     = ave_me$std.error,
+      t_or_z_Value = ave_me$statistic,
+      Pr           = ave_me$p.value,
+      Outcome       = feature,
+      CI_Lower     = ave_me$conf.low,
+      CI_Upper     = ave_me$conf.high,
+      Dist         = model_type
+    )
+    
+    lm_featureDemoAmyloidTau <- rbind(lm_featureDemoAmyloidTau, tmp)
+  }
+}
+
+```
+
+
+Summary
+```{r}
+lm_featureDemoAmyloidTau_select<-lm_featureDemoAmyloidTau %>% 
+  filter(Feature %in%c('Amygdala','Putamen','Inferiortemporal','Inferiorparietal','Entorhinal','Precuneus'))%>%
+  filter(Pr<0.05) 
+lm_featureDemoAmyloidTau_select
+```
+
+
+
+```{r}
+write.csv(lm_featureDemoAmyloidTau_select,file.path(table_dir, "lm_featureDemoAmyloidTau_select.csv"))
+write.csv(lm_featureDemoAmyloidTau,file.path(table_dir, "lm_featureDemoAmyloidTau.csv"))
+```
+
+#### control lmd. tau+age+sex+education+amyloid+lmd -> feature
+
+
+
+
+```{r}
+lm_featureDemoAmyloidTauLmd <- data.frame()
+for (tau in colnames(whole_df_clean[1:6])){
+  for (feature in colnames(whole_df_clean)[8:61]) {
+    if (feature %in% feat1) {
+      model_func <- run_betaIZ
+      model_type <- "BetaIZ"
+    } else if (feature %in% feat2) {
+      model_func <- run_gamma
+      model_type <- "Gamma"
+    } else if (feature %in% feat3) {
+      model_func <- run_negbreg
+      model_type <- "NegBin"
+    } else if (feature %in% c(feat4)) {
+      model_func <- run_gaussian
+      model_type <- "Gaussian"
+    } else {
+      warning(paste("Feature", feature, "not found in any type vector! Skipped."))
+      next
+    }
+    
+    ave_me <- model_func(
+      outcome    = feature,
+      predictor  = tau,
+      covariates = c("age", "sex", "Educg","ADNI.petpos",'LMd'),
+      data       = whole_df_clean
+    )
+    
+    tmp <- data.frame(
+      Feature      = ave_me$term,
+      Estimate     = ave_me$estimate,
+      StdError     = ave_me$std.error,
+      t_or_z_Value = ave_me$statistic,
+      Pr           = ave_me$p.value,
+      Outcome       = feature,
+      CI_Lower     = ave_me$conf.low,
+      CI_Upper     = ave_me$conf.high,
+      Dist         = model_type
+    )
+    
+    lm_featureDemoAmyloidTauLmd <- rbind(lm_featureDemoAmyloidTauLmd, tmp)
+  }
+}
+
+```
+
+
+
+
+Summary
+```{r}
+lm_featureDemoAmyloidTauLmd_select<-lm_featureDemoAmyloidTauLmd %>% 
+  filter(Feature%in%c('Amygdala','Putamen','Inferiortemporal','Inferiorparietal','Entorhinal','Precuneus'))%>%
+  filter(Pr<0.05)
+lm_featureDemoAmyloidTauLmd_select
+```
+
+```{r}
+write.csv(lm_featureDemoAmyloidTauLmd_select,file.path(table_dir, "lm_featureDemoAmyloidTauLmd_select.csv"))
+write.csv(lm_featureDemoAmyloidTauLmd,file.path(table_dir, "lm_featureDemoAmyloidTauLmd.csv"))
+```
+
+
+#### Regional Tau associations with logical memory delayed recall score and speech metrics without controlling for any convariates. tau->feature(lmd)
+
+
+```{r}
+lm_featureTau  <- data.frame()
+for (tau in colnames(whole_df_clean[1:6])){
+  for (feature in colnames(whole_df_clean)[7:61]) {
+    if (feature %in% feat1) {
+      model_func <- run_betaIZ
+      model_type <- "BetaIZ"
+    } else if (feature %in% feat2) {
+      model_func <- run_gamma
+      model_type <- "Gamma"
+    } else if (feature %in% feat3) {
+      model_func <- run_negbreg
+      model_type <- "NegBin"
+    } else if (feature %in% c(feat4,'LMd')) {
+      model_func <- run_gaussian
+      model_type <- "Gaussian"
+    } else {
+      warning(paste("Feature", feature, "not found in any type vector! Skipped."))
+      next
+    }
+    
+    ave_me <- model_func(
+      outcome    = feature,
+      predictor  = tau,
+      covariates = c(),
+      data       = whole_df_clean
+    )
+    
+    tmp <- data.frame(
+      Feature      = ave_me$term,
+      Estimate     = ave_me$estimate,
+      StdError     = ave_me$std.error,
+      t_or_z_Value = ave_me$statistic,
+      Pr           = ave_me$p.value,
+      Outcome       = feature,
+      CI_Lower     = ave_me$conf.low,
+      CI_Upper     = ave_me$conf.high,
+      Dist         = model_type
+    )
+    
+    lm_featureTau <- rbind(lm_featureTau, tmp)
+  }
+}
+```
+
+Summary
+```{r}
+lm_featureTau_select<-lm_featureTau %>% 
+  filter(Feature%in%c('Amygdala','Putamen','Inferiortemporal','Inferiorparietal','Entorhinal','Precuneus'))%>%
+  filter(Pr<0.05)
+lm_featureTau_select
+
+```
+
+```{r}
+write.csv(lm_featureTau_select,file.path(table_dir, "lm_featureTau_select.csv"))
+write.csv(lm_featureTau,file.path(table_dir, "lm_featureTau.csv"))
+```
+
+
+### Speech markers and region tau(A- only)
+
+select A- only
+
+```{r}
+# Restrict this set of models to amyloid-negative participants.
+whole_df_clean_A<-whole_df_clean[whole_df_clean$ADNI.petpos=='A-',]
+```
+
+#### Not control lmd. tau+age+sex+education -> feature
+
+
+```{r}
+lm_featureDemoTau  <- data.frame()
+for (tau in colnames(whole_df_clean_A[1:6])){
+  for (feature in colnames(whole_df_clean_A)[7:61]) {
+    if (feature %in% feat1) {
+      model_func <- run_betaIZ
+      model_type <- "BetaIZ"
+    } else if (feature %in% feat2) {
+      model_func <- run_gamma
+      model_type <- "Gamma"
+    } else if (feature %in% feat3) {
+      model_func <- run_negbreg
+      model_type <- "NegBin"
+    } else if (feature %in% c(feat4,'LMd')) {
+      model_func <- run_gaussian
+      model_type <- "Gaussian"
+    } else {
+      warning(paste("Feature", feature, "not found in any type vector! Skipped."))
+      next
+    }
+    
+    ave_me <- model_func(
+      outcome    = feature,
+      predictor  = tau,
+      covariates = c("age", "sex", "Educg"),
+      data       = whole_df_clean_A
+    )
+    
+    tmp <- data.frame(
+      Feature      = ave_me$term,
+      Estimate     = ave_me$estimate,
+      StdError     = ave_me$std.error,
+      t_or_z_Value = ave_me$statistic,
+      Pr           = ave_me$p.value,
+      Outcome       = feature,
+      CI_Lower     = ave_me$conf.low,
+      CI_Upper     = ave_me$conf.high,
+      Dist         = model_type
+    )
+    
+    lm_featureDemoTau <- rbind(lm_featureDemoTau, tmp)
+  }
+}
+```
+
+Summary
+```{r}
+lm_featureDemoTau_select<-lm_featureDemoTau %>% 
+  filter(Feature%in%c('Amygdala','Putamen','Inferiortemporal','Inferiorparietal','Entorhinal','Precuneus'))%>%
+  filter(Pr<0.05)
+lm_featureDemoTau_select
+```
+
+```{r}
+write.csv(lm_featureDemoTau_select,file.path(table_dir, "lm_featureDemoTau_select.csv"))
+write.csv(lm_featureDemoTau,file.path(table_dir, "lm_featureDemoTau.csv"))
+```
+
+#### control lmd. tau+age+sex+education+LMd -> feature
+
+```{r}
+lm_featureDemoTauLMd  <- data.frame()
+for (tau in colnames(whole_df_clean_A[1:6])){
+  for (feature in colnames(whole_df_clean_A)[8:61]) {
+    if (feature %in% feat1) {
+      model_func <- run_betaIZ
+      model_type <- "BetaIZ"
+    } else if (feature %in% feat2) {
+      model_func <- run_gamma
+      model_type <- "Gamma"
+    } else if (feature %in% feat3) {
+      model_func <- run_negbreg
+      model_type <- "NegBin"
+    } else if (feature %in% c(feat4)) {
+      model_func <- run_gaussian
+      model_type <- "Gaussian"
+    } else {
+      warning(paste("Feature", feature, "not found in any type vector! Skipped."))
+      next
+    }
+    
+    ave_me <- model_func(
+      outcome    = feature,
+      predictor  = tau,
+      covariates = c("age", "sex", "Educg",'LMd'),
+      data       = whole_df_clean_A
+    )
+    
+    tmp <- data.frame(
+      Feature      = ave_me$term,
+      Estimate     = ave_me$estimate,
+      StdError     = ave_me$std.error,
+      t_or_z_Value = ave_me$statistic,
+      Pr           = ave_me$p.value,
+      Outcome       = feature,
+      CI_Lower     = ave_me$conf.low,
+      CI_Upper     = ave_me$conf.high,
+      Dist         = model_type
+    )
+    
+    lm_featureDemoTauLMd <- rbind(lm_featureDemoTauLMd, tmp)
+  }
+}
+
+```
+
+Summary
+```{r}
+lm_featureDemoTauLMd_select<-lm_featureDemoTauLMd %>% 
+  filter(Feature%in%c('Amygdala','Putamen','Inferiortemporal','Inferiorparietal','Entorhinal','Precuneus'))%>%
+  filter(Pr<0.05)
+
+lm_featureDemoTauLMd_select
+```
+
+```{r}
+write.csv(lm_featureDemoTauLMd_select,file.path(table_dir, "lm_featureDemoTauLmd_select.csv"))
+write.csv(lm_featureDemoTauLMd,file.path(table_dir, "lm_featureDemoTauLmd.csv"))
+```
