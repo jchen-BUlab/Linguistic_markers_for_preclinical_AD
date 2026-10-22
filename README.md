@@ -66,7 +66,7 @@ Code/
 | `logistic_lasso.Rmd` | Corresponding RDS; regression-selection and Boruta CSVs | `lasso_lm_tau.csv`, `lasso_boruta_tau.csv`, `lasso_boruta_amyloid.csv` |
 | `Feature_Cluster.ipynb` | Linked feature CSV | `Linguistic_feature_dendrogram_cluster.csv`, `Linguistic_feature_dendrogram_leaf_label.csv`, tree/dendrogram files |
 | `combined_plot.Rmd` | Regression, Boruta and LASSO tables; dendrogram leaf-order CSV | `combined_plot_updated.png`, `combined_plot_updated.tif` |
-| `Revise_Code.Rmd` | `feature_np_tau_amyloid_20260512_revise.csv` | Additional revised regression tables |
+| `Sensitivity_analysis.Rmd` | `feature_np_tau_amyloid_20260512_revise.csv` | sensitivity analysis using continuous Amyloid measure |
 
 **Data availability:** No real participant transcripts, subject metadata, NP/PET measurements, or restricted reference-corpus data are included. The datasets analyzed in this study are available to qualified investigators through a formal research application to the Fram-ingham Heart Study (https://www.framinghamheartstudy.org/fhs-for-
 researchers/). Access may be subject to institutional and data-use approvals. Generated `selected_noise_segments_*.csv` files may contain transcript excerpts and should not be made public.
