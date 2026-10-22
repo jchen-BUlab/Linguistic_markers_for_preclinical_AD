@@ -1,0 +1,489 @@
+
+---
+title: "REVISION CODE JPAD"
+output: html_notebook
+---
+```{r}
+library(corrplot)
+library(reshape2)
+library(ggplot2)
+library(dplyr)
+if (!require("GGally")) install.packages("GGally")
+library(GGally)
+```
+
+```{r}
+# Revised regression analysis: uses the separately prepared revised feature table.
+# The revised input has its own name and is NOT assumed to be identical to the
+# normal/filtered files produced by the standard Data Link pipeline.
+results_dir <- Sys.getenv("FHS_RESULTS_DIR", unset = "Results")
+data_dir <- Sys.getenv("FHS_OUTPUT_DIR", unset = file.path(results_dir, "Data"))
+table_dir <- file.path(results_dir, "Table_Results")
+revised_input_filename <- Sys.getenv(
+  "FHS_REVISED_INPUT_FILE", unset = "feature_np_tau_amyloid_20260512_revise.csv"
+)
+dir.create(table_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+```{r}
+# Input: independently revised merged speech/NP/PET dataset.
+whole_df<-read.csv(file.path(data_dir, revised_input_filename))
+```
+
+```{r}
+ggplot(whole_df, aes(x = LMd)) +
+  geom_histogram(binwidth = 1, fill = "lightblue", color = "white") +
+  scale_x_continuous(breaks = 0:23) +
+  theme_classic()
+```
+```{r}
+mean_value<-mean(whole_df$bi_entorhinal,na.rm=TRUE)
+std_dev<-sd(whole_df$bi_entorhinal,na.rm=TRUE)
+lower_bound <- mean_value - 3 * std_dev
+upper_bound <- mean_value + 3 * std_dev
+outliers<-whole_df[whole_df$bi_entorhinal<lower_bound | whole_df$bi_entorhinal>upper_bound,]
+outliers
+```
+
+### Prepare the revised dataset
+
+```{r}
+# Original row-based exclusion: preserve the sample order used by this analysis.
+whole_df<-whole_df[c(1,3:239),]
+whole_df$sex<-as.factor(whole_df$sex)
+whole_df$ADNI.petpos<-as.factor(whole_df$ADNI.petpos)
+whole_df$Educg<-as.factor(whole_df$Educg)
+```
+
+```{r}
+whole_df<-whole_df%>%
+  dplyr::rename(Amygdala = bi_Amygdala, Putamen = bi_Putamen, Inferiortemporal = bi_inferiortemporal, Inferiorparietal = bi_inferiorparietal, Entorhinal = bi_entorhinal, Precuneus = bi_precuneus)
+  
+```
+
+
+
+```{r}
+# Original position-based column selection; column order must match the revised input.
+whole_df<-whole_df[,c(2:116,119:123)]
+```
+
+### Select data for lm analysis
+```{r}
+# Preserve the exact variables selected for the revised regression models.
+whole_df<-whole_df[,c(2:7,20,62:120)]
+```
+
+```{r}
+# Assign feature families to the regression distributions used in the revision.
+# feat1: zero-inflated beta; feat2: Gamma; feat3: negative binomial;
+# remaining continuous features: Gaussian.
+feat1 <- c("adjectivesRate",
+"adverbsRate",
+"conjunctionsRate",
+"interjectionsRate", 
+"noiseRate",
+"noiseSentencesRate",
+"particlesRate",
+"uniqueAdjectivesRate",
+"uniqueAdverbsRate",
+"uniqueInterjectionsRate",
+"uniqueParticlesRate"
+)
+
+# type 2: > 0 , right skewed
+# model: gamma regression
+feat2 <- c(
+"pronounProperNounRatio", 
+"standardizedPauseRate"
+)
+
+# type 3: count variables, with many zeros
+# model: negative binomial regression
+feat3 <- c(
+"betweenUtterancePauseNumber",
+"totalFilledPauses",
+"totalNoise",
+"totalNoiseSentences",
+"withinUtterancePause"
+)
+
+```
+
+
+
+```{r}
+feat4<-setdiff(colnames(whole_df)[8:61],c(feat1,feat2,feat3))
+```
+
+
+```{r}
+# Standardize six regional tau measurements; preserve original scale call.
+whole_df[,c(1:6)] <- scale(whole_df[,c(1:6)])
+```
+
+### speech markers and amyloid status
+
+```{r}
+amyloid_feature_lmd<-whole_df[,c(1:66)]
+amyloid_feature_lmd<-na.omit(amyloid_feature_lmd)
+```
+
+#### Linear regression. age+sex+educg+amyloid -> speech markers
+
+
+
+```{r}
+cov_ls <- c("age", "sex", "Educg")
+```
+
+
+```{r}
+ggplot(amyloid_feature_lmd, aes(x = ADNI.global.composite)) +
+  geom_histogram(
+    bins = 30,
+    fill = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Distribution of ADNI Global Composite",
+    x = "ADNI.global.composite",
+    y = "Count"
+  ) +
+  theme_classic()
+```
+```{r}
+# install.packages(c("glmmTMB", "marginaleffects"))
+library(glmmTMB)
+library(marginaleffects)
+# Model the expected outcome using a zero-inflated beta regression and
+# extract the average marginal effect of the selected predictor.
+run_betaIZ <- function(outcome, predictor, covariates, data) {
+  # Combine predictor and covariates into a formula string
+  formula_str1 <- paste(" ~ ", paste(c(predictor, covariates), collapse = " + "))
+  formula_str2 <- paste(outcome, formula_str1)
+  
+  # Convert to formula object
+  formula_obj1 <- as.formula(formula_str1)
+  formula_obj2 <- as.formula(formula_str2)
+  
+  # Fit zero-inflated beta regression model
+  model <- glmmTMB(
+    formula_obj2,  # mean of positive part (beta)
+    ziformula = formula_obj1,  # zero-inflation model (Pr(“extra zero”))
+    dispformula = formula_obj1, 
+    family = beta_family(link = "logit"),
+    data = data
+  )
+    
+  # summary(model)
+  
+  # Average marginal effect of X on E[y | y>0, X]
+  ave_me <- avg_slopes(
+    model,
+    variables = predictor,
+    type = "response",            # on the y scale, not logit
+    re.form = NA
+  )
+
+  # summary(ave_me)
+  return(ave_me)
+}
+```
+
+
+```{r}
+# Fit Gamma regression with log link; return its average marginal effect.
+run_gamma <- function(outcome, predictor, covariates, data) {
+  # Combine predictor and covariates into a formula string
+  formula_str1 <- paste(" ~ ", paste(c(predictor, covariates), collapse = " + "))
+  formula_str2 <- paste(outcome, formula_str1)
+  
+  # Convert to formula object
+  formula_obj1 <- as.formula(formula_str1)
+  formula_obj2 <- as.formula(formula_str2)
+  
+  # Fit Gamma regression (not zero-inflated beta).
+  model <- glm(
+    formula_obj2,  # mean of positive part (beta)
+    family = Gamma(link = "log"),
+    data = data
+  )
+    
+  # summary(model)
+  # 
+  # confint(model)        # 95% CIs for coefficients
+
+  # Average marginal effect of X on E[y | y>0, X]
+  ave_me <- avg_slopes(
+    model,
+    variables = predictor,
+    type = "response"            # on the y scale, not logit
+  )
+
+  # summary(ave_me)
+  return(ave_me)
+}
+```
+
+
+```{r}
+library(MASS)
+
+# Fit negative-binomial regression for count-type features.
+run_negbreg <- function(outcome, predictor, covariates, data) {
+  # Combine predictor and covariates into a formula string
+  formula_str1 <- paste(" ~ ", paste(c(predictor, covariates), collapse = " + "))
+  formula_str2 <- paste(outcome, formula_str1)
+  
+  # Convert to formula object
+  formula_obj1 <- as.formula(formula_str1)
+  formula_obj2 <- as.formula(formula_str2)
+  
+  # Fit negative-binomial regression.
+  model <- glm.nb(
+    formula_obj2,  # mean of positive part (beta)
+    data = data
+  )
+    
+  # summary(model)
+
+  # confint(model)        # 95% CIs for coefficients
+
+  # Average marginal effect of X on E[y | y>0, X]
+  ave_me <- avg_slopes(
+    model,
+    variables = predictor,
+    type = "response"            # on the y scale, not logit
+  )
+
+  # summary(ave_me)
+  return(ave_me)
+}
+```
+
+```{r}
+# Fit Gaussian regression for continuous features.
+run_gaussian <- function(outcome, predictor, covariates, data) {
+  # Combine predictor and covariates into a formula
+  formula_str <- paste(outcome, "~", paste(c(predictor, covariates), collapse = " + "))
+  formula_obj <- as.formula(formula_str)
+  
+  # Fit Gaussian regression model
+  model <- glm(
+    formula_obj,
+    family = gaussian(),
+    data = data
+  )
+  
+  # Main model summary
+  # print(summary(model))
+  # 
+  # Confidence intervals
+  # print(confint(model))
+  
+  # Average marginal effects
+  ave_me <- avg_slopes(
+    model,
+    variables = predictor,
+    type = "response"   # effect on the original scale
+  )
+  
+  # print(summary(ave_me))
+  
+  return(ave_me)
+}
+```
+
+```{r}
+# Revised amyloid-composite associations across linguistic outcomes.
+lm_featureDemoAmyloid <- data.frame()
+
+for (feature in colnames(amyloid_feature_lmd)[1:61]) {
+
+  if (feature %in% feat1) {
+    print(feature)
+    model_func <- run_betaIZ
+    model_type <- "BetaIZ"
+  } else if (feature %in% feat2) {
+    model_func <- run_gamma
+    model_type <- "Gamma"
+  } else if (feature %in% feat3) {
+    model_func <- run_negbreg
+    model_type <- "NegBin"
+  } else if (feature %in% c(feat4,'LMd',colnames(amyloid_feature_lmd)[1:6])) {
+    model_func <- run_gaussian
+    model_type <- "Gaussian"
+  } else {
+    warning(paste("Feature", feature, "not found in any type vector! Skipped."))
+    next
+  }
+  ave_me <- model_func(
+    outcome    = feature,
+    predictor  = "ADNI.global.composite",
+    covariates = c("age", "sex", "Educg"),
+    data       = amyloid_feature_lmd
+  )
+  
+  tmp <- data.frame(
+    Feature      = ave_me$term,
+    Estimate     = ave_me$estimate,
+    StdError     = ave_me$std.error,
+    t_or_z_Value = ave_me$statistic,
+    Pr           = ave_me$p.value,
+    Outcome       = feature,
+    CI_Lower     = ave_me$conf.low,
+    CI_Upper     = ave_me$conf.high,
+    Dist         = model_type
+  )
+  
+  lm_featureDemoAmyloid <- rbind(lm_featureDemoAmyloid, tmp)
+}
+
+```
+```{r}
+lm_featureDemoAmyloid_Select<-lm_featureDemoAmyloid[lm_featureDemoAmyloid$Feature=='ADNI.global.composite' & lm_featureDemoAmyloid$Pr<0.05,]
+lm_featureDemoAmyloid_Select
+```
+```{r}
+write.csv(lm_featureDemoAmyloid,file.path(table_dir, "lm_featureDemoAmyloid_revised.csv"),row.names = FALSE)
+write.csv(lm_featureDemoAmyloid_Select,file.path(table_dir, "lm_featureDemoAmyloid_select_revised.csv"),row.names = FALSE)
+```
+
+```{r}
+whole_df_clean<-whole_df[,c(1:66)]
+whole_df_clean<-na.omit(whole_df_clean)
+```
+
+
+#### Not control lmd. tau+age+sex+education+amyloid -> feature
+
+
+
+```{r}
+
+# Repeat revised regressions for six tau PET regions, adjusting for amyloid.
+lm_featureDemoAmyloidTau <- data.frame()
+for (tau in colnames(whole_df_clean[1:6])){
+  for (feature in colnames(whole_df_clean)[7:61]) {
+    if (feature %in% feat1) {
+      model_func <- run_betaIZ
+      model_type <- "BetaIZ"
+    } else if (feature %in% feat2) {
+      model_func <- run_gamma
+      model_type <- "Gamma"
+    } else if (feature %in% feat3) {
+      model_func <- run_negbreg
+      model_type <- "NegBin"
+    } else if (feature %in% c(feat4,'LMd')) {
+      model_func <- run_gaussian
+      model_type <- "Gaussian"
+    } else {
+      warning(paste("Feature", feature, "not found in any type vector! Skipped."))
+      next
+    }
+    
+    ave_me <- model_func(
+      outcome    = feature,
+      predictor  = tau,
+      covariates = c("age", "sex", "Educg","ADNI.global.composite"),
+      data       = whole_df_clean
+    )
+    
+    tmp <- data.frame(
+      Feature      = ave_me$term,
+      Estimate     = ave_me$estimate,
+      StdError     = ave_me$std.error,
+      t_or_z_Value = ave_me$statistic,
+      Pr           = ave_me$p.value,
+      Outcome       = feature,
+      CI_Lower     = ave_me$conf.low,
+      CI_Upper     = ave_me$conf.high,
+      Dist         = model_type
+    )
+    
+    lm_featureDemoAmyloidTau <- rbind(lm_featureDemoAmyloidTau, tmp)
+  }
+}
+
+```
+
+
+Summary
+```{r}
+lm_featureDemoAmyloidTau_select<-lm_featureDemoAmyloidTau %>% 
+  filter(Feature %in%c('Amygdala','Putamen','Inferiortemporal','Inferiorparietal','Entorhinal','Precuneus'))%>%
+  filter(Pr<0.05) 
+lm_featureDemoAmyloidTau_select
+```
+
+
+
+```{r}
+write.csv(lm_featureDemoAmyloidTau_select,file.path(table_dir, "lm_featureDemoAmyloidTau_select_revised.csv"))
+write.csv(lm_featureDemoAmyloidTau,file.path(table_dir, "lm_featureDemoAmyloidTau_revised.csv"))
+```
+
+#### control lmd. tau+age+sex+education+amyloid+lmd -> feature
+
+
+
+
+```{r}
+# Additional tau models controlling for LMd. Results are retained in memory
+# (the original notebook does not export a CSV for this last analysis).
+lm_featureDemoAmyloidTauLmd <- data.frame()
+for (tau in colnames(whole_df_clean[1:6])){
+  for (feature in colnames(whole_df_clean)[8:61]) {
+    if (feature %in% feat1) {
+      model_func <- run_betaIZ
+      model_type <- "BetaIZ"
+    } else if (feature %in% feat2) {
+      model_func <- run_gamma
+      model_type <- "Gamma"
+    } else if (feature %in% feat3) {
+      model_func <- run_negbreg
+      model_type <- "NegBin"
+    } else if (feature %in% c(feat4)) {
+      model_func <- run_gaussian
+      model_type <- "Gaussian"
+    } else {
+      warning(paste("Feature", feature, "not found in any type vector! Skipped."))
+      next
+    }
+    
+    ave_me <- model_func(
+      outcome    = feature,
+      predictor  = tau,
+      covariates = c("age", "sex", "Educg","ADNI.petpos",'LMd'),
+      data       = whole_df_clean
+    )
+    
+    tmp <- data.frame(
+      Feature      = ave_me$term,
+      Estimate     = ave_me$estimate,
+      StdError     = ave_me$std.error,
+      t_or_z_Value = ave_me$statistic,
+      Pr           = ave_me$p.value,
+      Outcome       = feature,
+      CI_Lower     = ave_me$conf.low,
+      CI_Upper     = ave_me$conf.high,
+      Dist         = model_type
+    )
+    
+    lm_featureDemoAmyloidTauLmd <- rbind(lm_featureDemoAmyloidTauLmd, tmp)
+  }
+}
+
+```
+
+
+
+
+Summary
+```{r}
+lm_featureDemoAmyloidTauLmd_select<-lm_featureDemoAmyloidTauLmd %>% 
+  filter(Feature%in%c('Amygdala','Putamen','Inferiortemporal','Inferiorparietal','Entorhinal','Precuneus'))%>%
+  filter(Pr<0.05)
+lm_featureDemoAmyloidTauLmd_select
+```

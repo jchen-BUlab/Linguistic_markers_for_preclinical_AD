@@ -1,0 +1,10 @@
+SubjectID,SentenceID,SyntaxRule_original
+SYN001,SYN001_Sentence1,nsubj + VERB
+SYN001,SYN001_Sentence1,det + NOUN
+SYN001,SYN001_Sentence2,nsubj + VERB
+SYN001,SYN001_Sentence2,amod + NOUN
+SYN001,SYN001_Sentence3,nsubj + VERB
+SYN002,SYN002_Sentence1,nsubj + VERB
+SYN002,SYN002_Sentence2,nsubj + VERB
+SYN002,SYN002_Sentence3,nsubj + VERB
+SYN002,SYN002_Sentence3,amod + NOUN

@@ -1,0 +1,349 @@
+---
+title: "Data Link"
+output: html_notebook
+---
+```{r}
+library(dplyr)
+library(plyr)
+library(tidyr)
+
+# Configure input/output directories. Environment variables can override defaults.
+# Data/ contains the neuropsychological and PET tables; the feature and final
+# output directories match the feature-generation step in this repository.
+data_dir <- Sys.getenv("FHS_DATA_DIR", unset = "Data")
+output_dir <- Sys.getenv("FHS_OUTPUT_DIR", unset = file.path("Results", "Data"))
+feature_dir <- Sys.getenv("FHS_FEATURE_INPUT_DIR", unset = output_dir)
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Choose one feature set per run: "normal" (default) or "filtered".
+# The NP/PET matching and all downstream analyses are identical for both.
+feature_variant <- tolower(Sys.getenv("FHS_FEATURE_VARIANT", unset = "normal"))
+if (!(feature_variant %in% c("normal", "filtered"))) {
+  stop("FHS_FEATURE_VARIANT must be 'normal' or 'filtered'.")
+}
+
+input_feature_filename <- if (feature_variant == "filtered") {
+  "linguistic_feature_spacy_clean_filtered_20251116.csv"
+} else {
+  "linguistic_feature_spacy_clean_20251116.csv"
+}
+
+output_feature_filename <- if (feature_variant == "filtered") {
+  "feature_np_tau_amyloid_filtered_20251116.csv"
+} else {
+  "feature_np_tau_amyloid_20251116.csv"
+}
+```
+
+## Prepare np test data link with feature data which generated from transcript files.
+Load data from NP test, NP test complemented and feature data extracted from transcripts.
+```{r}
+np_test_cp<-read.csv(file.path(data_dir, "np_summary_score_neuroteam.csv"))#1534
+np_test<-read.csv(file.path(data_dir, "np_test_id_idtype.csv"))#18834
+feature<-read.csv(file.path(feature_dir, input_feature_filename))#655
+# Preserve the original recording identifier before splitting subjectID.
+feature$filename<-feature$subjectID
+```
+We can see that there are 1534 records in np test complemented, 18834 in np test, 655 in feature
+<br>
+Delete 2 dvr files, We get 653 records from transcripts.
+
+Add id,id_idtype_date to the file
+```{r}
+feature<-feature%>%
+  separate(subjectID,into=c('part_1','part_2','part_3','part_4','part_5','part_6'),sep = "[-_]")%>%
+  mutate(
+    id = part_3,
+    id_idtype = paste0(part_2,'-',part_3),
+    idtype = part_2,
+    date = ifelse(nchar(part_4)==6,paste0('20',substr(part_4, 5, 6),substr(part_4, 1, 4)),part_4)
+  )%>%
+  mutate(
+    date = as.Date(date,format = "%Y%m%d")
+  )%>%
+   select(-part_1,-part_2,-part_3,-part_4,-part_5,-part_6)
+  
+  
+```
+
+
+```{r}
+# Remove two previously identified DVR recordings (row indices in the original input).
+# These indices depend on the original feature-table row order.
+feature<-feature[-c(597,635),]#653
+```
+Format the date and id_idtype columns in np test complemented
+```{r}
+np_test_cp$id <- ifelse(nchar(np_test_cp$id) == 4, np_test_cp$id,
+                        ifelse(nchar(np_test_cp$id) == 3, paste0('0', np_test_cp$id),
+                               ifelse(nchar(np_test_cp$id) == 2, paste0('00', np_test_cp$id),
+                                      ifelse(nchar(np_test_cp$id) == 1, paste0('000', np_test_cp$id), np_test_cp$id))))
+np_test_cp$id_idtype<-paste0(np_test_cp$idtype,'-',np_test_cp$id)
+np_test_cp$date<-as.Date(np_test_cp$examdate)
+```
+
+You can check the different columns use the code below
+```{r}
+setdiff(names(np_test), names(np_test_cp))
+setdiff(names(np_test_cp),names(np_test))
+
+np_test_cp<-np_test_cp[,!colnames(np_test_cp)%in%c('examdate','testsubj','testtype')]
+```
+
+For convenience, select id_idtype, exam date and LMd score, and filter the na rows.
+
+```{r}
+np_test_selected<-np_test[,colnames(np_test)%in%c('id_idtype','date','LMd')]#18834
+np_test_cp_selected<-np_test_cp[,colnames(np_test_cp)%in%c('id_idtype','date','LMd')]#1534
+feature_selected<-feature[,colnames(feature)%in%c('id_idtype','date','subjectID')]#653
+
+np_test_selected<-na.omit(np_test_selected)#18419
+np_test_cp_selected<-na.omit(np_test_cp_selected)#1488
+```
+After this step we get 18419 rows in np test and 1488 rows in np test complemented
+<br>
+Link feature with np test data, group the data use id_idtype, and date in feature table. Calculate the difference and limit the date as exact date(diff<1).
+```{r}
+# Match by subject ID and retain the closest NP assessment on the same date.
+feature_np<-merge(feature_selected,np_test_selected,by='id_idtype')#2071
+feature_np<- feature_np %>%
+  dplyr::group_by(id_idtype,date.x) %>%
+  dplyr::mutate(diff = abs(difftime(date.x, date.y, units = "days")))%>%
+  dplyr::mutate(diff = as.numeric(diff, units = "days")) %>%
+  dplyr::filter(diff == min(diff))%>%
+  dplyr::filter(diff<1)#617
+```
+After this step we get 617 records match entirely in np test and feature data, so there are still 36 feature data don't have np test records.   
+Add new columns named combined_key for data link, and compare the difference in feature and linked data to find missing records.
+```{r}
+feature_selected$combined_key <- paste(feature_selected$id_idtype, feature_selected$date)
+feature_np$combined_key <- paste(feature_np$id_idtype, feature_np$date.x)
+
+feature_np_key<-feature_np$combined_key
+diff_keys <- setdiff(feature_selected$combined_key, feature_np$combined_key)#36
+diff_rows <- feature[feature_selected$combined_key %in% diff_keys, ]
+
+diff_rows<-diff_rows[,!colnames(diff_rows)%in%c('combined_key')]
+```
+Link unmatched transcripts with the complemented NP test data.
+```{r}
+# Attempt to recover transcripts without an exact match in the primary NP table.
+feature_np_cp<-merge(diff_rows,np_test_cp_selected,by='id_idtype')#44
+feature_np_cp<- feature_np_cp %>%
+  dplyr::group_by(id_idtype,date.x) %>%
+  dplyr::mutate(diff = abs(difftime(date.x, date.y, units = "days")))%>%
+  dplyr::mutate(diff = as.numeric(diff, units = "days")) %>%
+  dplyr::filter(diff == min(diff))%>%
+  dplyr::filter(diff<1)#34
+```
+Use the same strategy as before, and we find 34 records matched to the feature data exactly(diff<1).
+```{r}
+feature_np_cp$combined_key<-paste(feature_np_cp$id_idtype,feature_np_cp$date.y)
+feature_np_cp_key<-feature_np_cp$combined_key
+setdiff(paste(diff_rows$id_idtype,diff_rows$date),paste(feature_np_cp$id_idtype,feature_np_cp$date.x))#"3-2473 2019-09-06" "3-2951 2019-06-10"
+```
+After comparison, we find two recordings don't appear in np test and np test complemented. "3-2473 2019-09-06" and "3-2951 2019-06-10". So ignore them.
+<br>
+Add combined_key column for data linking.
+```{r}
+feature$combined_key<-paste(feature$id_idtype,feature$date)
+np_test$combined_key<-paste(np_test$id_idtype,np_test$date)
+np_test_cp$combined_key<-paste(np_test_cp$id_idtype,np_test_cp$date)
+```
+Filter data in the whole table(all columns) using the combined_key we generated before.
+```{r}
+np_test_filtered<-np_test[np_test$combined_key%in%feature_np_key,]#617
+np_test_cp_filtered<-np_test_cp[np_test_cp$combined_key%in%feature_np_cp_key,]#34
+```
+Merge feature with np test, and feature with np test complemented. Delete redundant columns.
+```{r}
+feature_np_whole<-merge(feature,np_test_filtered,by='combined_key')
+feature_np_cp_whole<-merge(feature,np_test_cp_filtered,by='combined_key')
+feature_np_whole <- dplyr::rename(feature_np_whole, 'recording_date' = date.x)
+feature_np_whole <- dplyr::rename(feature_np_whole, 'nptest_date' = date.y)
+feature_np_cp_whole <- dplyr::rename(feature_np_cp_whole, 'recording_date' = date.x)
+feature_np_cp_whole <- dplyr::rename(feature_np_cp_whole, 'nptest_date' = date.y)
+
+feature_np_whole<-feature_np_whole[,!colnames(feature_np_whole)%in%c('combined_key','id.x','idtype.x','idtype.y','id.y','id_idtype.y')]
+featuer_np_cp_whole<-feature_np_cp_whole[,!colnames(feature_np_cp_whole)%in%c('combined_key','id.x','idtype.x','idtype.y','id.y','id_idtype.y')]
+```
+Merge two tables. Finally we get total 651 records, which have exact match with id, idtype and exam date from both np test and feature generated by transcript file.
+```{r}
+feature_np_combined <- rbind.fill(feature_np_whole, feature_np_cp_whole)
+feature_np_combined<-feature_np_combined[,!colnames(feature_np_combined)%in%c('combined_key','id.x','idtype.x','idtype.y','id.y','id_idtype.y','date.y')]
+names(feature_np_combined)[names(feature_np_combined) == "id_idtype.x"] <- "id_idtype"
+```
+
+```{r}
+# Record whether each NP assessment came from the complemented or primary table.
+feature_np_combined$FROM <- ifelse(feature_np_combined$id_idtype %in% np_test_cp_filtered$id_idtype, 'compliment','original')
+```
+
+
+```{r}
+# write.csv(feature_np_combined, file.path(output_dir, "feature_np_spacy_cleaned_651.csv"))
+```
+
+## Prepare pet amyloid test data link with pet tau data.
+Load data
+```{r}
+pet_tau<-read.csv(file.path(data_dir, "pet_tau_id_idtype.csv"))
+pet_amyloid<-read.csv(file.path(data_dir, "pet_amyloid_id_idtype.csv"))
+
+```
+
+```{r}
+# Categorize years of education using the original study-specific thresholds.
+pet_amyloid$Educg<-ifelse(pet_amyloid$Education_b2<=5,0,
+                          ifelse(pet_amyloid$Education_b2<=11,1,
+                                 ifelse(pet_amyloid$Education_b2>11 & !is.na(pet_amyloid$Education_b2>11),2,3)))
+```
+
+
+```{r}
+pet_tau_selected<-pet_tau[,colnames(pet_tau)%in%c("bi_entorhinal","bi_Amygdala","bi_inferiortemporal","bi_inferiorparietal","bi_precuneus","bi_Putamen","id_idtype","date")]
+pet_amyloid_selected<-pet_amyloid[,colnames(pet_amyloid)%in%c("id_idtype","date","ADNI.petpos","sex",'age','Educg')]
+```
+We get 284 rows from pet amyloid data and 244 rows from pet tau data.
+<br>
+Merge amyloid data and pet tau data using id idtype. and filter two exam date of these data within 1 year
+```{r}
+# Select the closest PET visits within a strict 365-day window.
+amyloid_tau<-merge(pet_amyloid_selected,pet_tau_selected,by='id_idtype')
+amyloid_tau <- amyloid_tau %>%
+  dplyr::group_by(id_idtype, date.x) %>%
+  dplyr::mutate(diff = abs(difftime(date.x, date.y, units = "days")))%>%
+  dplyr::mutate(diff = as.numeric(diff, units = "days")) %>%
+  dplyr::filter(diff == min(diff))%>%
+  dplyr::filter(diff<365)
+
+```
+After merge, we can find there are 234 records remained which pet tau and pet amyloid matched.
+
+## link Pet tau data with np test
+Link feature_np_combined with pet tau data
+```{r}
+feature_np_tau<-merge(pet_tau_selected,feature_np_combined,by='id_idtype')
+feature_np_tau<-feature_np_tau%>%
+  dplyr::group_by(id_idtype, date) %>%
+  dplyr::mutate(diff = abs(difftime(date, recording_date, units = "days")))%>%
+  dplyr::mutate(diff = as.numeric(diff, units = "days")) %>%
+  dplyr::filter(diff == min(diff))%>%
+  dplyr::filter(diff<365)
+```
+Link feature_np_combined with amyloid_tau
+```{r}
+feature_np_tau_amyloid<-merge(amyloid_tau,feature_np_combined,by='id_idtype')
+feature_np_tau_amyloid<-feature_np_tau_amyloid%>%
+  dplyr::group_by(id_idtype, date.x) %>%
+  dplyr::mutate(diff = abs(difftime(date.x, recording_date, units = "days")))%>%
+  dplyr::mutate(diff = as.numeric(diff, units = "days")) %>%
+  dplyr::filter(diff == min(diff))%>%
+  dplyr::filter(diff<365)
+```
+
+Conclusion:
+feature_np_tau have 228 rows, and feature_np_tau_amyloid have 220 rows,so 8 amyloid missed.   
+tau_np_cp have 243 rows, tau_np have 220 rows, and there's no differense in the group of id_idtype and date.y(np_test date) indicate np test have 243 matched rows with tau pet. 
+so there are 243-228=15 rows of feature missed(in one year of pet tau)
+
+```{r}
+tau_np<-merge(pet_tau_selected,np_test_selected,by='id_idtype')
+tau_np<-tau_np%>%
+  dplyr::group_by(id_idtype,date.x) %>%
+  dplyr::mutate(diff = abs(difftime(date.x, date.y, units = "days")))%>%
+  dplyr::mutate(diff = as.numeric(diff, units = "days")) %>%
+  dplyr::filter(diff == min(diff))%>%
+  dplyr::filter(diff<365)
+```
+
+
+```{r}
+tau_np_cp<-merge(pet_tau_selected,np_test_cp,by='id_idtype')
+tau_np_cp<-tau_np_cp%>%
+  dplyr::group_by(id_idtype,date.x) %>%
+  dplyr::mutate(diff = abs(difftime(date.x, date.y, units = "days")))%>%
+  dplyr::mutate(diff = as.numeric(diff, units = "days")) %>%
+  dplyr::filter(diff == min(diff))%>%
+  dplyr::filter(diff<365)
+```
+
+## Compare NP assessment matches from the two sources
+```{r}
+setdiff(paste(tau_np$id_idtype,tau_np$date.y),paste(tau_np_cp$id_idtype,tau_np_cp$date.y))
+# setdiff(paste(pet_tau$id_idtype,pet_tau$date),paste(feature_np_tau$id_idtype,feature_np_tau$date.x))
+# setdiff(paste(tau_np_cp$id_idtype,tau_np_cp$date.x),paste(feature_np_tau$id_idtype,feature_np_tau$date.x))
+```
+## 243 
+```{r}
+tau_np_cp<-tau_np_cp[!is.na(tau_np_cp$LMd), ]
+```
+
+```{r}
+tau_np_cp$merge_key <- paste(tau_np_cp$id_idtype, tau_np_cp$date.y, sep="_")
+feature$merge_key <- paste(feature$id_idtype, feature$date, sep="_")
+```
+
+```{r}
+# Keep all matched NP/PET rows, even when a transcript feature row is absent.
+feature_np_tau <- merge(tau_np_cp, feature, by = 'merge_key', all.x = TRUE)
+feature_np_tau<-feature_np_tau[,!colnames(feature_np_tau)%in%c('combined_key.y','idtype.y','id.y','id_idtype.y','diff','combined_key.x','id.x','idtype.x','merge_key','date','date.y','date.x','sex','age','educg',"X")]
+```
+
+```{r}
+np_test_cp$educg<-ifelse(np_test_cp$education_b2<=5,0,
+                         ifelse(np_test_cp$education_b2<=11,1,
+                                ifelse(np_test_cp$education_b2>11 & !is.na(np_test_cp$education_b2),2,3)))
+```
+
+```{r}
+np_test$educg<-ifelse(np_test$education_b2<=5,0,
+                         ifelse(np_test$education_b2<=11,1,
+                                ifelse(np_test$education_b2>11 & !is.na(np_test$education_b2),2,3)))
+```
+
+
+```{r}
+feature_np_tau_amyloid<-merge(feature_np_tau,pet_amyloid_selected,by.x='id_idtype.x',by.y='id_idtype',all.x=TRUE)
+# Fill missing demographic values from the available NP tables when unambiguous.
+feature_np_tau_amyloid$educg<-ifelse(is.na(feature_np_tau_amyloid$Educg),sapply(feature_np_tau_amyloid$id_idtype, function(x) {
+    unique_value <- unique(np_test[np_test$id_idtype == x, 'educg'],na.action =na.exclude)
+    if (length(unique_value) == 1) unique_value else NA
+  }),feature_np_tau_amyloid$Educg)
+
+feature_np_tau_amyloid$educg<-ifelse(is.na(feature_np_tau_amyloid$educg),sapply(feature_np_tau_amyloid$id_idtype, function(x) {
+    unique_value <- unique(np_test_cp[np_test_cp$id_idtype == x, 'educg'],na.action =na.exclude)
+    if (length(unique_value) == 1) unique_value else NA
+  }),feature_np_tau_amyloid$educg)
+
+feature_np_tau_amyloid$Age<-ifelse(is.na(feature_np_tau_amyloid$age),sapply(feature_np_tau_amyloid$id_idtype, function(x) {
+    unique_value <- unique(np_test_cp[np_test_cp$id_idtype == x, 'age'])
+    if (length(unique_value) == 1) unique_value else NA
+  }),feature_np_tau_amyloid$age)
+
+feature_np_tau_amyloid$Sex<-ifelse(is.na(feature_np_tau_amyloid$sex),sapply(feature_np_tau_amyloid$id_idtype, function(x) {
+    unique_value <- unique(np_test_cp[np_test_cp$id_idtype == x, 'sex'])
+    if (length(unique_value) == 1) unique_value else NA
+  }),feature_np_tau_amyloid$sex)
+
+feature_np_tau_amyloid<-feature_np_tau_amyloid[,!colnames(feature_np_tau_amyloid)%in%c('Educg','age','sex')]
+feature_np_tau_amyloid<-feature_np_tau_amyloid%>%
+   dplyr::rename(age = Age,sex = Sex,Educg=educg)
+names(feature_np_tau_amyloid)[names(feature_np_tau_amyloid) == "id_idtype.x"] <- "id_idtype"
+```
+
+```{r}
+# Historical manual correction for row 14; verify row order when using new data.
+feature_np_tau_amyloid[14,'Educg']<-2
+```
+
+Finally we get 239 rows of data with pet tau and LMd while 11 rows of data don't have transcript, 10 row of data don't have amyloid status.
+
+
+
+```{r}
+# Export the merged analysis table using its original output filename.
+write.csv(feature_np_tau_amyloid, file.path(output_dir, output_feature_filename))
+```
+
+

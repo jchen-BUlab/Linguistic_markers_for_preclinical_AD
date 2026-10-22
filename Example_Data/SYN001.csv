@@ -1,0 +1,7 @@
+cohort,ID,date,tier,name,start_time,end_time,duration,contents,task,clean_contents,clean_contents_w_selfcor,segment_id,comment,selfcorrection
+SYNTHETIC,SYN001,2026-01-01,INV,Interviewer,0,1500,1500,What is happening in this picture?,PictureDescription,What is happening in this picture?,What is happening in this picture?,SYN001_001,,0
+SYNTHETIC,SYN001,2026-01-01,PAR,Participant,1800,4000,2200,The family is having a picnic.,PictureDescription,The family is having a picnic.,The family is having a picnic.,SYN001_002,,0
+SYNTHETIC,SYN001,2026-01-01,INV,Interviewer,4600,5800,1200,What else do you see?,PictureDescription,What else do you see?,What else do you see?,SYN001_003,,0
+SYNTHETIC,SYN001,2026-01-01,PAR,Participant,6500,9000,2500,I remember a basket near the table.,PictureDescription,I remember a basket near the table.,I remember a basket near the table.,SYN001_004,,0
+SYNTHETIC,SYN001,2026-01-01,INV,Interviewer,10000,11500,1500,Can you describe the child?,PictureDescription,Can you describe the child?,Can you describe the child?,SYN001_005,,0
+SYNTHETIC,SYN001,2026-01-01,PAR,Participant,12100,14600,2500,A child runs beside the tree.,PictureDescription,A child runs beside the tree.,A child runs beside the tree.,SYN001_006,,0

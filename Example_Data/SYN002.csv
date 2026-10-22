@@ -1,0 +1,7 @@
+cohort,ID,date,tier,name,start_time,end_time,duration,contents,task,clean_contents,clean_contents_w_selfcor,segment_id,comment,selfcorrection
+SYNTHETIC,SYN002,2026-01-02,INV,Interviewer,0,1200,1200,Describe the picture.,PictureDescription,Describe the picture.,Describe the picture.,SYN002_001,,0
+SYNTHETIC,SYN002,2026-01-02,PAR,Participant,1600,4200,2600,Two people are talking.,PictureDescription,Two people are talking.,Two people are talking.,SYN002_002,,0
+SYNTHETIC,SYN002,2026-01-02,INV,Interviewer,4900,5700,800,What else?,PictureDescription,What else?,What else?,SYN002_003,,0
+SYNTHETIC,SYN002,2026-01-02,PAR,Participant,6300,9200,2900,They sit beside the window.,PictureDescription,They sit beside the window.,They sit beside the window.,SYN002_004,,0
+SYNTHETIC,SYN002,2026-01-02,INV,Interviewer,10100,11300,1200,And the weather?,PictureDescription,And the weather?,And the weather?,SYN002_005,,0
+SYNTHETIC,SYN002,2026-01-02,PAR,Participant,12000,14400,2400,The weather looks bright.,PictureDescription,The weather looks bright.,The weather looks bright.,SYN002_006,,0

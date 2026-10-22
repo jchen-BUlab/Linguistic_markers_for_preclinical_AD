@@ -1,0 +1,202 @@
+---
+title: "Linguistic Feature Distributions and LMd Associations"
+output: html_notebook
+---
+
+## Setup
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+
+# Use the same paths and feature variant as the upstream analysis scripts.
+results_dir <- Sys.getenv("FHS_RESULTS_DIR", unset = "Results")
+data_dir <- Sys.getenv("FHS_OUTPUT_DIR", unset = file.path(results_dir, "Data"))
+feature_variant <- tolower(Sys.getenv("FHS_FEATURE_VARIANT", unset = "normal"))
+if (!(feature_variant %in% c("normal", "filtered"))) {
+  stop("FHS_FEATURE_VARIANT must be 'normal' or 'filtered'.")
+}
+
+input_feature_filename <- if (feature_variant == "filtered") {
+  "feature_np_tau_amyloid_filtered_20251116.csv"
+} else {
+  "feature_np_tau_amyloid_20251116.csv"
+}
+input_rds_filename <- if (feature_variant == "filtered") {
+  "tauFeatureAmyloidDemo_filtered.rds"
+} else {
+  "tauFeatureAmyloidDemo.rds"
+}
+
+table_dir <- file.path(results_dir, if (feature_variant == "filtered") {
+  "Table_Results_filtered"
+} else {
+  "Table_Results"
+})
+figure_dir <- file.path(results_dir, if (feature_variant == "filtered") {
+  "Figure_Results_filtered"
+} else {
+  "Figure_Results"
+})
+# Preserve the original filtered histogram output directory; keep normal plots separate.
+distribution_dir <- if (feature_variant == "filtered") {
+  file.path(results_dir, "Figure_Results", "Feature_Distribution_Filtered")
+} else {
+  file.path(results_dir, "Figure_Results", "Feature_Distribution")
+}
+for (path in c(table_dir, figure_dir, distribution_dir)) {
+  dir.create(path, recursive = TRUE, showWarnings = FALSE)
+}
+```
+
+## Feature distributions
+
+```{r}
+# Data Link output: the original filtered histogram script used columns 63:120.
+# The normal feature table has two fewer feature columns in the corresponding range.
+whole_df <- read.csv(file.path(data_dir, input_feature_filename))
+hist_cols <- if (feature_variant == "filtered") 63:120 else 63:118
+if (ncol(whole_df) < max(hist_cols)) {
+  stop("The linked feature table has fewer columns than expected for the selected variant.")
+}
+```
+
+```{r}
+# Save one histogram per selected feature, using the original hist_<feature>.png filenames.
+for (i in hist_cols) {
+  
+  colname <- colnames(whole_df)[i]
+  values <- whole_df[[i]]
+
+  outfile <- file.path(distribution_dir, paste0("hist_", colname, ".png"))
+  
+  png(outfile, width = 1000, height = 600, res = 150)
+  
+  hist(values,
+       main = paste("Histogram of", colname),
+       xlab = colname,
+       col = "skyblue",
+       border = "white")
+  
+  dev.off()
+}
+```
+
+## LMd associations with linguistic features
+
+```{r}
+# Input from the corresponding speech-marker analysis (normal or filtered).
+whole_df <- readRDS(file.path(data_dir, input_rds_filename))
+```
+
+### Model 1: LMd as the only predictor
+
+For each linguistic feature, fit `feature ~ LMd` (the feature is the response).
+
+```{r}
+lm_featureLmd <- data.frame(
+  Feature = character(),
+  Estimate = numeric(),
+  StdError = numeric(),
+  tValue = numeric(),
+  Pr = numeric(),
+  Model = character(),
+  stringsAsFactors = FALSE
+)
+```
+
+```{r}
+for (c in colnames(whole_df[,8:61])){
+  formular_1<-as.formula(paste(c, "~ LMd"))
+  model_1<-lm(formular_1,data=whole_df)
+  coef_table_1<-coef(summary(model_1))
+  for (var in rownames(coef_table_1)[-1]) {
+    var_coef <- coef_table_1[var,]
+    lm_featureLmd <- rbind(lm_featureLmd, data.frame(
+      Feature = var,
+      Estimate = var_coef["Estimate"],
+      StdError = var_coef["Std. Error"],
+      tValue = var_coef["t value"],
+      Pr = var_coef["Pr(>|t|)"],  
+      Model = c
+    ))
+  }
+}
+```
+
+### Model 2: LMd with demographic and amyloid covariates
+
+For each linguistic feature, fit `feature ~ LMd + age + sex + Educg + ADNI.petpos`.
+
+```{r}
+lm_featureLmd_2 <- data.frame(
+  Feature = character(),
+  Estimate = numeric(),
+  StdError = numeric(),
+  tValue = numeric(),
+  Pr = numeric(),
+  Model = character(),
+  stringsAsFactors = FALSE
+)
+```
+
+```{r}
+for (c in colnames(whole_df[,8:61])){
+  formular_2<-as.formula(paste(c, "~ LMd + age+sex+Educg+ADNI.petpos"))
+  model_2<-lm(formular_2,data=whole_df)
+  coef_table_2<-coef(summary(model_2))
+  for (var in rownames(coef_table_2)[2]) {
+    var_coef <- coef_table_2[var,]
+    lm_featureLmd_2 <- rbind(lm_featureLmd_2, data.frame(
+      Feature = var,
+      Estimate = var_coef["Estimate"],
+      StdError = var_coef["Std. Error"],
+      tValue = var_coef["t value"],
+      Pr = var_coef["Pr(>|t|)"],  
+      Model = c
+    ))
+  }
+}
+```
+
+### Compare regression estimates
+
+```{r}
+# Align the two model results by feature name; retain the original comparison columns.
+feature_lmd_coef<-merge(lm_featureLmd,lm_featureLmd_2,by='Model')
+feature_lmd_coef_sel<-feature_lmd_coef[,c("Model", "Pr.x","Pr.y",'Estimate.x','Estimate.y')]
+feature_lmd_coef_sel$sig<-ifelse(feature_lmd_coef_sel$Pr.x<0.05 & feature_lmd_coef_sel$Pr.y<0.05,'TRUE',"FALSE")
+
+# The source notebook wrote a cluster-annotated table; that external cluster
+# analysis is intentionally excluded, so save the unclustered comparison explicitly.
+write.csv(feature_lmd_coef, file.path(table_dir, "Feature_LMd_regression_comparison.csv"))
+```
+
+```{r}
+# Compare unadjusted and adjusted LMd regression coefficients.
+p<-ggplot(feature_lmd_coef_sel, aes(x = Estimate.x, y = Estimate.y, color = sig)) +
+  geom_point(size = 1) +  
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "black")) +  
+  # geom_hline(yintercept = abs(log(0.05)), linetype = "dashed", color = "blue") +  
+  # geom_vline(xintercept = abs(log(0.05)), linetype = "dashed", color = "blue") +  
+  theme_minimal() +
+  geom_abline(slope = 1, intercept = 0, linetype = "solid", color = "green")+
+  labs(title = "Scatter Plot of p-values",
+       x = "Feature LMd Estimate",
+       y = "Feature LMd controled Estimate",
+       color = "Significant") +
+  theme(legend.position = "top")+
+  geom_text_repel(
+    data = subset(feature_lmd_coef_sel, Pr.x< 0.05 & Pr.y <0.05), 
+    aes(label = Model),  
+    size = 3,              
+    max.overlaps = 25,    
+    box.padding = 0.5,     
+    point.padding = 0.3
+  )
+p
+```
+
+```{r}
+ggsave(file.path(figure_dir, "feature_lmd_scatterplot_estimate.png"), plot = p, width = 8, height = 6, dpi = 300)
+```
