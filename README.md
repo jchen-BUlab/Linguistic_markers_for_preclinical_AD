@@ -32,6 +32,7 @@ Code/
 ├── logistic_lasso.Rmd                   # LASSO analyses using features selected by individual regression analyses
 ├── Feature_Cluster.ipynb                # Feature correlations and hierarchical clustering
 ├── combined_plot.Rmd                    # Combined regression, LASSO, and Boruta plots
+├── Sensitivity_analysis.Rmd            # Sensitivity analysis for continous Amyloid status
 └── Syntax_frequency_SLT/
     ├── process_switchboard.py          # Prepare Switchboard transcripts
     ├── write_parser_commands.py        # Prepare Stanford Parser commands
@@ -74,9 +75,9 @@ Default output locations are `Results/Data/`, `Results/Table_Results/`, and `Res
 
 ## Synthetic input examples
 
-The `examples/` folder contains **entirely fictional** data illustrating the expected input formats. These files are for demonstrating column names and file organization, **not** for reproducing study results.
+The `Example_Data/` folder contains **entirely fictional** data illustrating the expected input formats. These files are for demonstrating column names and file organization, **not** for reproducing study results.
 
-**Transcript CSV** — one file per recording/subject (for example, [`examples/transcripts/SYN001.csv`](examples/transcripts/SYN001.csv)). The original transcript format uses these columns:
+**Transcript CSV** — one file per recording/subject (for example, [`Example_Data/transcripts/SYN001.csv`](Example_Data/transcripts/SYN001.csv)). The original transcript format uses these columns:
 
 ```csv
 cohort,ID,date,tier,name,start_time,end_time,duration,contents,task,clean_contents,clean_contents_w_selfcor,segment_id,comment,selfcorrection
@@ -86,7 +87,7 @@ SYNTHETIC,SYN001,2026-01-01,PAR,Participant,1800,4000,2200,The family is having 
 
 Here, `PAR` identifies participant speech and `INV` interviewer speech. `start_time`, `end_time`, and `duration` are in milliseconds. The feature-generation scripts specifically use `ID`, `tier`, `contents`, `duration`, `start_time`, and `end_time`. Each filename stem must match the `subjectID` in the syntax-score table used by the feature extractor.
 
-**Syntax-rule input** — [`examples/syntaxrules_example.csv`](examples/syntaxrules_example.csv) illustrates the output format of `get_rule_counts.py` used by `generate_syntac_subject_score.py`:
+**Syntax-rule input** — [`Example_Data/syntaxrules_example.csv`](Example_Data/syntaxrules_example.csv) illustrates the output format of `get_rule_counts.py` used by `generate_syntac_subject_score.py`:
 
 ```csv
 SubjectID,SentenceID,SyntaxRule_original
@@ -94,11 +95,11 @@ SYN001,SYN001_Sentence1,nsubj + VERB
 SYN001,SYN001_Sentence1,det + NOUN
 ```
 
-**Subject-level syntax scores** — [`examples/features/syntac_subject_score.csv`](examples/features/syntac_subject_score.csv) is generated from the synthetic syntax rules. The relevant columns are `subjectID` and `syntac_score`, which are merged into linguistic features by the Python scripts. The generated example retains the original CSV index column. To regenerate this example from the repository root:
+**Subject-level syntax scores** — [`Example_Data/features/syntac_subject_score.csv`](Example_Data/features/syntac_subject_score.csv) is generated from the synthetic syntax rules. The relevant columns are `subjectID` and `syntac_score`, which are merged into linguistic features by the Python scripts. The generated example retains the original CSV index column. To regenerate this example from the repository root:
 
 ```bash
-FHS_SYNTAX_RULES_FILE=examples/syntaxrules_example.csv \
-FHS_FEATURE_DIR=examples/features \
+FHS_SYNTAX_RULES_FILE=Example_Data/syntaxrules_example.csv \
+FHS_FEATURE_DIR=Example_Data/features \
 python Code/Syntax_frequency_SLT/generate_syntac_subject_score.py
 ```
 
