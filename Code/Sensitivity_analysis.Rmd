@@ -1,6 +1,6 @@
 
 ---
-title: "REVISION CODE JPAD"
+title: "sensitivity analysis using continuous amlyloid measure"
 output: html_notebook
 ---
 ```{r}
