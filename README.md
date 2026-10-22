@@ -77,7 +77,7 @@ Default output locations are `Results/Data/`, `Results/Table_Results/`, and `Res
 
 The `Example_Data/` folder contains **entirely fictional** data illustrating the expected input formats. These files are for demonstrating column names and file organization, **not** for reproducing study results.
 
-**Transcript CSV** — one file per recording/subject (for example, [`Example_Data/transcripts/SYN001.csv`](Example_Data/transcripts/SYN001.csv)). The original transcript format uses these columns:
+**Transcript CSV** — one file per recording/subject (for example, [`Example_Data/SYN001.csv`](Example_Data/SYN001.csv)). The original transcript format uses these columns:
 
 ```csv
 cohort,ID,date,tier,name,start_time,end_time,duration,contents,task,clean_contents,clean_contents_w_selfcor,segment_id,comment,selfcorrection
@@ -95,11 +95,11 @@ SYN001,SYN001_Sentence1,nsubj + VERB
 SYN001,SYN001_Sentence1,det + NOUN
 ```
 
-**Subject-level syntax scores** — [`Example_Data/features/syntac_subject_score.csv`](Example_Data/features/syntac_subject_score.csv) is generated from the synthetic syntax rules. The relevant columns are `subjectID` and `syntac_score`, which are merged into linguistic features by the Python scripts. The generated example retains the original CSV index column. To regenerate this example from the repository root:
+**Subject-level syntax scores** — [`Example_Data/syntac_subject_score.csv`](Example_Data/syntac_subject_score.csv) is generated from the synthetic syntax rules. The relevant columns are `subjectID` and `syntac_score`, which are merged into linguistic features by the Python scripts. The generated example retains the original CSV index column. To regenerate this example from the repository root:
 
 ```bash
 FHS_SYNTAX_RULES_FILE=Example_Data/syntaxrules_example.csv \
-FHS_FEATURE_DIR=Example_Data/features \
+FHS_FEATURE_DIR=Example_Data/ \
 python Code/Syntax_frequency_SLT/generate_syntac_subject_score.py
 ```
 
